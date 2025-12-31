@@ -2,18 +2,25 @@
 
 import {
   Accordion,
+  ActionIcon,
   Alert,
   Badge,
+  Box,
   Button,
   Divider,
   Group,
+  Modal,
+  Paper,
+  SimpleGrid,
   Stack,
   Text,
   TextInput,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
 import { Tree } from "@mantine/core";
 import type { TreeNodeData } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { useEffect, useMemo, useState } from "react";
 import { schemaToTree } from "./schemaToTree";
 
@@ -91,8 +98,27 @@ type OpenApiDocument = {
   paths?: Record<string, OpenApiPathItem>;
 };
 
+const METHOD_META = {
+  GET: { color: "cyan", gradient: { from: "cyan", to: "teal", deg: 120 } },
+  POST: { color: "green", gradient: { from: "lime", to: "green", deg: 120 } },
+  PUT: { color: "blue", gradient: { from: "blue", to: "cyan", deg: 120 } },
+  PATCH: { color: "orange", gradient: { from: "yellow", to: "orange", deg: 120 } },
+  DELETE: { color: "red", gradient: { from: "red", to: "orange", deg: 120 } },
+} as const;
+
 const METHOD_ORDER: ApiMethod["method"][] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+const SERVICE_COLORS = ["teal", "cyan", "blue", "lime", "yellow", "orange", "red"] as const;
 const DEFAULT_SOURCE = "data/petStore.json";
+
+function pickServiceColor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash << 5) - hash + name.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % SERVICE_COLORS.length;
+  return SERVICE_COLORS[index];
+}
 
 function toHttpMethod(value: string): ApiMethod["method"] | null {
   const upper = value.toUpperCase();
@@ -121,7 +147,7 @@ function pickResponseSchema(responses?: Record<string, OpenApiResponse>): JsonSc
   const keys = Object.keys(responses);
   const preferred =
     ["200", "201", "202", "204"].find((status) => responses[status]) ??
-    keys.find((status) => /^2\\d\\d$/.test(status)) ??
+    keys.find((status) => /^2\d\d$/.test(status)) ??
     (responses.default ? "default" : keys[0]);
   if (!preferred) return undefined;
   return pickContentSchema(responses[preferred]?.content);
@@ -300,34 +326,55 @@ function openApiToMicroservices(doc: OpenApiDocument): Microservice[] {
 }
 
 function MethodHeader({ m }: { m: ApiMethod }) {
+  const theme = useMantineTheme();
+  const meta = METHOD_META[m.method];
+
   return (
     <Group gap="sm">
-      <Badge variant="light">{m.method}</Badge>
-      <Text fw={600}>{m.operationId}</Text>
+      <Badge variant="gradient" gradient={meta.gradient} size="sm">
+        {m.method}
+      </Badge>
+      <Text fw={600} c={theme.colors[meta.color][7]}>
+        {m.operationId}
+      </Text>
     </Group>
   );
 }
 
 function SchemaPanel({ title, schema }: { title: string; schema?: JsonSchema }) {
   const treeData: TreeNodeData[] = schema ? schemaToTree(schema, title) : [];
+  const tone = title.toLowerCase() === "request" ? "cyan" : "teal";
 
   return (
-    <Stack gap="xs">
-      <Group justify="space-between">
-        <Text fw={700}>{title}</Text>
-        {!schema && (
-          <Badge color="gray" variant="light">
-            no schema
+    <Paper
+      className="schema-card"
+      data-kind={title.toLowerCase()}
+      withBorder
+      radius="md"
+      p="sm"
+    >
+      <Stack gap="xs">
+        <Group justify="space-between">
+          <Badge variant="light" color={tone} size="sm">
+            {title}
           </Badge>
-        )}
-      </Group>
+          {!schema && (
+            <Badge color="gray" variant="light">
+              no schema
+            </Badge>
+          )}
+        </Group>
 
-      {schema ? <Tree data={treeData} /> : null}
-    </Stack>
+        {schema ? <Tree data={treeData} className="schema-tree" /> : null}
+      </Stack>
+    </Paper>
   );
 }
 
 export default function OpenApiIoExplorer() {
+  const theme = useMantineTheme();
+  const [previewOpened, previewHandlers] = useDisclosure(false);
+  const [previewDoc, setPreviewDoc] = useState<OpenApiDocument | null>(null);
   const [source, setSource] = useState(DEFAULT_SOURCE);
   const [services, setServices] = useState<Microservice[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -347,6 +394,19 @@ export default function OpenApiIoExplorer() {
       ),
     [services]
   );
+
+  const previewJson = useMemo(
+    () => (previewDoc ? JSON.stringify(previewDoc, null, 2) : ""),
+    [previewDoc]
+  );
+
+  const previewLines = useMemo(() => previewJson.split("\n"), [previewJson]);
+  const previewTitle = useMemo(() => {
+    if (!loadedSource) return "preview.json";
+    const trimmed = loadedSource.split("?")[0];
+    const parts = trimmed.split("/");
+    return parts[parts.length - 1] || "preview.json";
+  }, [loadedSource]);
 
   useEffect(() => {
     void loadSource(DEFAULT_SOURCE);
@@ -381,6 +441,7 @@ export default function OpenApiIoExplorer() {
       setServices(parsed);
       setLoadedSource(target);
       setSpecTitle(typeof openApi?.info?.title === "string" ? openApi.info.title : null);
+      setPreviewDoc(openApi);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load the source.");
     } finally {
@@ -389,102 +450,225 @@ export default function OpenApiIoExplorer() {
   }
 
   return (
-    <Stack gap="md">
-      <Title order={2}>OpenAPI I/O Explorer (Accordion + Schema Tree)</Title>
-      <Text c="dimmed">Load an OpenAPI JSON file from a URL or local path in data/.</Text>
-      {specTitle ? (
-        <Text fw={600}>Spec: {specTitle}</Text>
-      ) : null}
-      {loadedSource ? (
-        <Text size="sm" c="dimmed">
-          Source: <code>{loadedSource}</code>
-        </Text>
-      ) : null}
+    <Stack gap="lg">
+      <Modal
+        opened={previewOpened}
+        onClose={previewHandlers.close}
+        size="xl"
+        padding={0}
+        centered
+        withCloseButton={false}
+        classNames={{ content: "vscode-modal", body: "vscode-body" }}
+        overlayProps={{ blur: 3, opacity: 0.45 }}
+      >
+        <div className="vscode-titlebar">
+          <div className="vscode-dots">
+            <span className="vscode-dot red" />
+            <span className="vscode-dot yellow" />
+            <span className="vscode-dot green" />
+          </div>
+          <div className="vscode-title">{previewTitle}</div>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            aria-label="Close preview"
+            onClick={previewHandlers.close}
+          >
+            X
+          </ActionIcon>
+        </div>
+        <div className="vscode-panel">
+          {previewDoc ? (
+            <div className="vscode-code" role="region" aria-label="Preview JSON">
+              {previewLines.map((line, index) => (
+                <div key={`${index}-${line}`} className="vscode-line">
+                  <span className="vscode-linenum">{index + 1}</span>
+                  <span className="vscode-text">{line || " "}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Text className="vscode-empty">Load a document to preview the raw JSON.</Text>
+          )}
+        </div>
+      </Modal>
 
-      <Group align="flex-end" wrap="wrap">
-        <TextInput
-          label="OpenAPI JSON path or URL"
-          placeholder="data/petStore.json or https://example.com/openapi.json"
-          value={source}
-          onChange={(event) => setSource(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void loadSource();
-            }
-          }}
-          styles={{ root: { flex: 1, minWidth: 260 } }}
-        />
-        <Button loading={loading} onClick={() => void loadSource()}>
-          Load
-        </Button>
-      </Group>
-      <Text size="xs" c="dimmed">
-        Local paths are resolved inside the project <code>data/</code> folder.
-      </Text>
-      {error ? (
-        <Alert color="red" title="Load error" variant="light">
-          {error}
-        </Alert>
-      ) : null}
+      <Paper className="glass-card rise-in" p="lg" radius="lg">
+        <Stack gap="md">
+          <Group justify="space-between" align="flex-start" wrap="wrap">
+            <Stack gap="xs">
+              <Badge variant="gradient" gradient={{ from: "orange", to: "yellow", deg: 90 }}>
+                OpenAPI explorer
+              </Badge>
+              <Title order={2}>OpenAPI I/O Explorer (Accordion + Schema Tree)</Title>
+              <Text c="dimmed">Load an OpenAPI JSON file from a URL or local path in data/.</Text>
+              {specTitle ? <Text fw={600}>Spec: {specTitle}</Text> : null}
+              {loadedSource ? (
+                <Text size="sm" c="dimmed">
+                  Source: <code>{loadedSource}</code>
+                </Text>
+              ) : null}
+              <Group gap="xs" wrap="wrap">
+                <Badge variant="light" color="teal">
+                  {totals.services} services
+                </Badge>
+                <Badge variant="light" color="cyan">
+                  {totals.endpoints} endpoints
+                </Badge>
+                <Badge variant="light" color="green">
+                  {totals.methods} methods
+                </Badge>
+              </Group>
+            </Stack>
 
-      <Group gap="xs">
-        <Badge variant="light">{totals.services} services</Badge>
-        <Badge variant="light">{totals.endpoints} endpoints</Badge>
-        <Badge variant="light">{totals.methods} methods</Badge>
-      </Group>
+            <Stack gap="sm" align="flex-end">
+              <Stack gap="xs" className="legend-card">
+                <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+                  Method palette
+                </Text>
+                <Group gap="xs" wrap="wrap">
+                  {METHOD_ORDER.map((method) => {
+                    const meta = METHOD_META[method];
+                    return (
+                      <Badge key={method} variant="light" color={meta.color} size="xs">
+                        {method}
+                      </Badge>
+                    );
+                  })}
+                </Group>
+              </Stack>
+              <Button
+                variant="gradient"
+                gradient={{ from: "teal", to: "cyan", deg: 120 }}
+                onClick={previewHandlers.open}
+                disabled={!previewDoc}
+              >
+                Preview JSON
+              </Button>
+            </Stack>
+          </Group>
 
-      <Divider />
+          <Divider />
+
+          <Group align="flex-end" wrap="wrap">
+            <TextInput
+              label="OpenAPI JSON path or URL"
+              placeholder="data/petStore.json or https://example.com/openapi.json"
+              value={source}
+              onChange={(event) => setSource(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void loadSource();
+                }
+              }}
+              styles={{ root: { flex: 1, minWidth: 260 } }}
+            />
+            <Button loading={loading} onClick={() => void loadSource()}>
+              Load
+            </Button>
+          </Group>
+          <Text size="xs" c="dimmed">
+            Local paths are resolved inside the project <code>data/</code> folder.
+          </Text>
+          {error ? (
+            <Alert color="red" title="Load error" variant="light">
+              {error}
+            </Alert>
+          ) : null}
+        </Stack>
+      </Paper>
+
+      <Divider label="Services" labelPosition="center" />
 
       {services.length ? (
-        <Accordion multiple defaultValue={[services[0]?.name].filter(Boolean) as string[]}>
-          {services.map((svc) => (
-            <Accordion.Item key={svc.name} value={svc.name}>
-              <Accordion.Control>
-                <Group justify="space-between">
-                  <Text fw={700}>{svc.name}</Text>
-                  <Badge variant="light">{svc.endpoints.length} endpoints</Badge>
-                </Group>
-              </Accordion.Control>
+        <Accordion
+          multiple
+          variant="separated"
+          radius="lg"
+          defaultValue={[services[0]?.name].filter(Boolean) as string[]}
+        >
+          {services.map((svc, svcIndex) => {
+            const serviceColor = pickServiceColor(svc.name);
+            const serviceShade = theme.colors[serviceColor][6];
 
-              <Accordion.Panel>
-                <Accordion multiple>
-                  {svc.endpoints.map((ep) => (
-                    <Accordion.Item key={ep.path} value={ep.path}>
-                      <Accordion.Control>
-                        <Group justify="space-between">
-                          <Text ff="monospace">{ep.path}</Text>
-                          <Badge variant="light">{ep.methods.length} methods</Badge>
-                        </Group>
-                      </Accordion.Control>
+            return (
+              <Accordion.Item
+                key={svc.name}
+                value={svc.name}
+                className="service-item rise-in"
+                style={{
+                  borderLeft: `4px solid ${serviceShade}`,
+                  animationDelay: `${svcIndex * 90}ms`,
+                }}
+              >
+                <Accordion.Control>
+                  <Group justify="space-between" wrap="wrap">
+                    <Group gap="xs">
+                      <Box className="service-dot" style={{ backgroundColor: serviceShade }} />
+                      <Text fw={700}>{svc.name}</Text>
+                    </Group>
+                    <Badge variant="light" color={serviceColor}>
+                      {svc.endpoints.length} endpoints
+                    </Badge>
+                  </Group>
+                </Accordion.Control>
 
-                      <Accordion.Panel>
-                        <Accordion multiple>
-                          {ep.methods.map((m) => (
-                            <Accordion.Item
-                              key={`${ep.path}:${m.method}:${m.operationId}`}
-                              value={`${ep.path}:${m.method}:${m.operationId}`}
-                            >
-                              <Accordion.Control>
-                                <MethodHeader m={m} />
-                              </Accordion.Control>
+                <Accordion.Panel>
+                  <Accordion multiple variant="separated" radius="md">
+                    {svc.endpoints.map((ep) => (
+                      <Accordion.Item key={ep.path} value={ep.path}>
+                        <Accordion.Control>
+                          <Group justify="space-between" wrap="wrap">
+                            <Text ff="var(--font-mono)" fw={600}>
+                              {ep.path}
+                            </Text>
+                            <Group gap="xs" wrap="wrap">
+                              {ep.methods.map((method) => {
+                                const meta = METHOD_META[method.method];
+                                return (
+                                  <Badge
+                                    key={`${ep.path}:${method.method}`}
+                                    color={meta.color}
+                                    size="xs"
+                                    variant="light"
+                                  >
+                                    {method.method}
+                                  </Badge>
+                                );
+                              })}
+                            </Group>
+                          </Group>
+                        </Accordion.Control>
 
-                              <Accordion.Panel>
-                                <Stack gap="md">
-                                  <SchemaPanel title="Request" schema={m.request} />
-                                  <SchemaPanel title="Response" schema={m.response} />
-                                </Stack>
-                              </Accordion.Panel>
-                            </Accordion.Item>
-                          ))}
-                        </Accordion>
-                      </Accordion.Panel>
-                    </Accordion.Item>
-                  ))}
-                </Accordion>
-              </Accordion.Panel>
-            </Accordion.Item>
-          ))}
+                        <Accordion.Panel>
+                          <Accordion multiple variant="separated" radius="md">
+                            {ep.methods.map((m) => (
+                              <Accordion.Item
+                                key={`${ep.path}:${m.method}:${m.operationId}`}
+                                value={`${ep.path}:${m.method}:${m.operationId}`}
+                              >
+                                <Accordion.Control>
+                                  <MethodHeader m={m} />
+                                </Accordion.Control>
+
+                                <Accordion.Panel>
+                                  <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+                                    <SchemaPanel title="Request" schema={m.request} />
+                                    <SchemaPanel title="Response" schema={m.response} />
+                                  </SimpleGrid>
+                                </Accordion.Panel>
+                              </Accordion.Item>
+                            ))}
+                          </Accordion>
+                        </Accordion.Panel>
+                      </Accordion.Item>
+                    ))}
+                  </Accordion>
+                </Accordion.Panel>
+              </Accordion.Item>
+            );
+          })}
         </Accordion>
       ) : (
         <Text c="dimmed">No endpoints loaded yet. Provide a source and click Load.</Text>

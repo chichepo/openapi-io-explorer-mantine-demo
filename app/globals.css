@@ -1,0 +1,238 @@
+:root {
+  --ink: #122231;
+  --muted: #506070;
+  --surface: rgba(255, 255, 255, 0.82);
+  --surface-strong: #ffffff;
+  --edge: rgba(17, 34, 49, 0.12);
+  --shadow: 0 18px 40px rgba(17, 34, 49, 0.12);
+  --accent: #f6b66c;
+  --accent-2: #2aa7a1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(900px 500px at 8% -10%, rgba(246, 182, 108, 0.35), transparent 65%),
+    radial-gradient(900px 500px at 100% 0%, rgba(42, 167, 161, 0.28), transparent 60%),
+    linear-gradient(180deg, #f7f4ee 0%, #e9f2ef 100%);
+  min-height: 100vh;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  filter: blur(50px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+body::before {
+  top: -120px;
+  left: -80px;
+  background: radial-gradient(circle, rgba(246, 182, 108, 0.55), transparent 70%);
+}
+
+body::after {
+  bottom: -140px;
+  right: -80px;
+  background: radial-gradient(circle, rgba(42, 167, 161, 0.45), transparent 70%);
+}
+
+code {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.page-shell {
+  padding: 40px 24px 80px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.glass-card {
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+.legend-card {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px dashed rgba(17, 34, 49, 0.2);
+}
+
+.service-item {
+  position: relative;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.service-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(17, 34, 49, 0.12);
+}
+
+.service-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.8);
+}
+
+.schema-card {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.schema-card[data-kind="request"] {
+  border-color: rgba(0, 148, 170, 0.35);
+  background: linear-gradient(135deg, rgba(0, 148, 170, 0.08), rgba(255, 255, 255, 0.8));
+}
+
+.schema-card[data-kind="response"] {
+  border-color: rgba(34, 139, 113, 0.35);
+  background: linear-gradient(135deg, rgba(34, 139, 113, 0.08), rgba(255, 255, 255, 0.8));
+}
+
+.schema-tree :where(button, span, div) {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.schema-tree .tree-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schema-tree .tree-label-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.schema-tree .tree-label-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.schema-tree .tree-label-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rise-in {
+  animation: rise-in 520ms ease both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.vscode-modal {
+  background: #1b1f27;
+  border: 1px solid #2a3140;
+  color: #d7dde7;
+}
+
+.vscode-body {
+  padding: 0;
+}
+
+.vscode-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #151923;
+  border-bottom: 1px solid #2a3140;
+}
+
+.vscode-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.vscode-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.vscode-dot.red {
+  background: #ff5f56;
+}
+
+.vscode-dot.yellow {
+  background: #ffbd2e;
+}
+
+.vscode-dot.green {
+  background: #27c93f;
+}
+
+.vscode-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b95a5;
+}
+
+.vscode-panel {
+  padding: 12px 14px 16px;
+}
+
+.vscode-code {
+  background: #0f1116;
+  border: 1px solid #2a3140;
+  border-radius: 10px;
+  padding: 12px;
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.vscode-line {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  white-space: pre;
+}
+
+.vscode-linenum {
+  color: #5f6b7b;
+  text-align: right;
+  user-select: none;
+}
+
+.vscode-text {
+  color: #d7dde7;
+}
+
+.vscode-empty {
+  color: #a5afbf;
+  font-size: 13px;
+}

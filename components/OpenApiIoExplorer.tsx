@@ -953,6 +953,7 @@ function SchemaPanel({
   resolveRef: SchemaResolver;
   format: PayloadFormat;
 }) {
+  const [analysisOpened, analysisHandlers] = useDisclosure(false);
   const isAnalysis = format === "analysis";
   const payload = useMemo(
     () => (schema && !isAnalysis ? schemaToPayload(schema, resolveRef, format) : ""),
@@ -977,11 +978,39 @@ function SchemaPanel({
           <Badge variant="light" color={tone} size="sm">
             {title}
           </Badge>
-          {!schema && (
-            <Badge color="gray" variant="light">
-              no schema
-            </Badge>
-          )}
+          <Group gap="xs">
+            {schema && isAnalysis ? (
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="Open analysis preview"
+                onClick={analysisHandlers.open}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M9 3H3v6" />
+                  <path d="M15 21h6v-6" />
+                  <path d="M3 3l8 8" />
+                  <path d="M21 21l-8-8" />
+                </svg>
+              </ActionIcon>
+            ) : null}
+            {!schema ? (
+              <Badge color="gray" variant="light">
+                no schema
+              </Badge>
+            ) : null}
+          </Group>
         </Group>
 
         {schema && isAnalysis ? (
@@ -1041,6 +1070,65 @@ function SchemaPanel({
           </pre>
         ) : null}
       </Stack>
+
+      {schema && isAnalysis ? (
+        <Modal
+          opened={analysisOpened}
+          onClose={analysisHandlers.close}
+          size="xl"
+          centered
+          title={`${title} analysis`}
+        >
+          <div className="schema-table schema-table--modal">
+            <table>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>In</th>
+                  <th>Type</th>
+                  <th>Required</th>
+                  <th>Format</th>
+                  <th>Nullable</th>
+                  <th>Enum</th>
+                  <th>Example</th>
+                  <th>Min</th>
+                  <th>Max</th>
+                  <th>MinLen</th>
+                  <th>MaxLen</th>
+                  <th>MinItems</th>
+                  <th>MaxItems</th>
+                  <th>Pattern</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={`modal-${row.key}`} data-struct={row.isStructure ? "true" : "false"}>
+                    <td className="schema-field" style={{ paddingLeft: 8 + row.depth * 16 }}>
+                      {row.name}
+                    </td>
+                    <td>{row.location ?? ""}</td>
+                    <td>{row.type ?? ""}</td>
+                    <td>{row.required ? "yes" : ""}</td>
+                    <td>{row.format ?? ""}</td>
+                    <td>{row.nullable ? "yes" : ""}</td>
+                    <td>{row.enumText ?? ""}</td>
+                    <td>{row.exampleText ?? ""}</td>
+                    <td>{row.minimum ?? ""}</td>
+                    <td>{row.maximum ?? ""}</td>
+                    <td>{row.minLength ?? ""}</td>
+                    <td>{row.maxLength ?? ""}</td>
+                    <td>{row.minItems ?? ""}</td>
+                    <td>{row.maxItems ?? ""}</td>
+                    <td>{row.pattern ?? ""}</td>
+                    <td>{row.description ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+      ) : null}
     </Paper>
   );
 }

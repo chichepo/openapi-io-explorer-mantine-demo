@@ -156,6 +156,10 @@ code {
   max-height: 420px;
 }
 
+.schema-table--modal {
+  max-height: 70vh;
+}
+
 .schema-table table {
   width: 100%;
   border-collapse: collapse;

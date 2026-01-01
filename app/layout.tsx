@@ -24,7 +24,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "OpenAPI I/O Explorer Demo",
-  description: "Accordion + Schema Tree demo",
+  description: "Accordion + Payload YAML demo",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

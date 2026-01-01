@@ -18,11 +18,8 @@ import {
   Title,
   useMantineTheme,
 } from "@mantine/core";
-import { Tree } from "@mantine/core";
-import type { TreeNodeData } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useEffect, useMemo, useState } from "react";
-import { schemaToTree } from "./schemaToTree";
 
 type JsonSchema =
   | {
@@ -35,6 +32,7 @@ type JsonSchema =
       enum?: Array<string | number | boolean | null>;
       example?: unknown;
       examples?: unknown[];
+      default?: unknown;
       nullable?: boolean;
       format?: string;
       $ref?: string;
@@ -42,6 +40,7 @@ type JsonSchema =
       anyOf?: JsonSchema[];
       allOf?: JsonSchema[];
       additionalProperties?: boolean | JsonSchema;
+      xml?: { name?: string };
     }
   | boolean;
 
@@ -96,6 +95,7 @@ type OpenApiDocument = {
   info?: { title?: string };
   tags?: Array<{ name?: string }>;
   paths?: Record<string, OpenApiPathItem>;
+  components?: { schemas?: Record<string, JsonSchema> };
 };
 
 const METHOD_META = {
@@ -109,6 +109,8 @@ const METHOD_META = {
 const METHOD_ORDER: ApiMethod["method"][] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const SERVICE_COLORS = ["teal", "cyan", "blue", "lime", "yellow", "orange", "red"] as const;
 const DEFAULT_SOURCE = "data/petStore.json";
+
+type SchemaResolver = (ref: string) => JsonSchema | undefined;
 
 function pickServiceColor(name: string) {
   let hash = 0;
@@ -244,6 +246,251 @@ function mergeRequestSchema(
   return bodySchema ?? paramsSchema;
 }
 
+function decodeRefPointer(pointer: string) {
+  return pointer.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function buildSchemaResolver(doc: OpenApiDocument | null): SchemaResolver {
+  const schemas = doc?.components?.schemas ?? {};
+  const aliasMap = new Map<string, JsonSchema>();
+
+  for (const [key, schema] of Object.entries(schemas)) {
+    aliasMap.set(key, schema);
+    if (schema && typeof schema === "object") {
+      const xmlName = typeof schema.xml?.name === "string" ? schema.xml.name : null;
+      if (xmlName && !aliasMap.has(xmlName)) {
+        aliasMap.set(xmlName, schema);
+      }
+    }
+    const hyphenIndex = key.indexOf("-");
+    if (hyphenIndex > 0) {
+      const base = key.slice(0, hyphenIndex);
+      if (!aliasMap.has(base)) {
+        aliasMap.set(base, schema);
+      }
+    }
+  }
+
+  return (ref: string) => {
+    if (!ref) return undefined;
+    const match = ref.match(/^#\/components\/schemas\/(.+)$/);
+    if (!match) return undefined;
+    const rawName = match[1];
+    let decoded = rawName;
+    try {
+      decoded = decodeURIComponent(rawName);
+    } catch {
+      decoded = rawName;
+    }
+    const name = decodeRefPointer(decoded);
+    return aliasMap.get(name);
+  };
+}
+
+function pickExampleValue(schema: Exclude<JsonSchema, boolean>) {
+  if (schema.example !== undefined) return schema.example;
+  if (schema.examples && schema.examples.length > 0) return schema.examples[0];
+  if (schema.default !== undefined) return schema.default;
+  if (schema.enum && schema.enum.length > 0) return schema.enum[0];
+  return undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringFallbackForFormat(format?: string): string {
+  switch (format) {
+    case "date":
+      return "2024-01-01";
+    case "date-time":
+      return "2024-01-01T00:00:00Z";
+    case "uuid":
+      return "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+    case "email":
+      return "user@example.com";
+    case "uri":
+    case "url":
+      return "https://example.com";
+    case "hostname":
+      return "example.com";
+    case "ipv4":
+      return "192.168.0.1";
+    case "ipv6":
+      return "2001:db8::1";
+    default:
+      return "string";
+  }
+}
+
+function schemaToExample(
+  schema: JsonSchema,
+  resolveRef: SchemaResolver,
+  seenRefs: Set<string>,
+  depth = 0
+): unknown {
+  if (depth > 6) return "<depth-limit>";
+  if (schema === true) return "<any>";
+  if (schema === false) return "<never>";
+  if (!schema || typeof schema !== "object") return null;
+
+  if (schema.$ref) {
+    if (seenRefs.has(schema.$ref)) return "<circular>";
+    const resolved = resolveRef(schema.$ref);
+    if (resolved) {
+      seenRefs.add(schema.$ref);
+      const value = schemaToExample(resolved, resolveRef, seenRefs, depth + 1);
+      seenRefs.delete(schema.$ref);
+      return value;
+    }
+    return schema.$ref;
+  }
+
+  const directExample = pickExampleValue(schema);
+  if (directExample !== undefined) return directExample;
+
+  let allOfBase: Record<string, unknown> | null = null;
+  if (schema.allOf?.length) {
+    let hasObject = false;
+    const merged = schema.allOf.reduce<Record<string, unknown>>((acc, item) => {
+      const value = schemaToExample(item, resolveRef, seenRefs, depth + 1);
+      if (isPlainObject(value)) {
+        hasObject = true;
+        Object.assign(acc, value);
+      }
+      return acc;
+    }, {});
+    allOfBase = hasObject ? merged : null;
+  }
+
+  if (schema.type === "object" || schema.properties || schema.additionalProperties || allOfBase) {
+    const properties = schema.properties ?? {};
+    const required = new Set(schema.required ?? []);
+    const keys = Object.keys(properties).sort((a, b) => {
+      const aRequired = required.has(a);
+      const bRequired = required.has(b);
+      if (aRequired !== bRequired) return aRequired ? -1 : 1;
+      return a.localeCompare(b);
+    });
+    const result: Record<string, unknown> = allOfBase ? { ...allOfBase } : {};
+    for (const key of keys) {
+      const propSchema = properties[key];
+      result[key] = schemaToExample(propSchema, resolveRef, seenRefs, depth + 1);
+    }
+
+    if (!keys.length && schema.additionalProperties) {
+      const additionalValue =
+        schema.additionalProperties === true
+          ? "<any>"
+          : schemaToExample(schema.additionalProperties, resolveRef, seenRefs, depth + 1);
+      result.additionalProp1 = additionalValue;
+    }
+    return result;
+  }
+
+  if (schema.type === "array" || schema.items) {
+    if (schema.items === false) return [];
+    const itemsSchema = schema.items === true ? "<any>" : schema.items ?? { type: "string" };
+    const itemValue =
+      typeof itemsSchema === "string"
+        ? itemsSchema
+        : schemaToExample(itemsSchema, resolveRef, seenRefs, depth + 1);
+    return [itemValue];
+  }
+
+  if (!allOfBase && schema.allOf?.length) {
+    return schemaToExample(schema.allOf[0], resolveRef, seenRefs, depth + 1);
+  }
+
+  if (schema.oneOf?.length) {
+    return schemaToExample(schema.oneOf[0], resolveRef, seenRefs, depth + 1);
+  }
+  if (schema.anyOf?.length) {
+    return schemaToExample(schema.anyOf[0], resolveRef, seenRefs, depth + 1);
+  }
+
+  if (schema.type === "string") {
+    return stringFallbackForFormat(schema.format);
+  }
+  if (schema.type === "integer" || schema.type === "number") {
+    return 0;
+  }
+  if (schema.type === "boolean") {
+    return false;
+  }
+
+  return "value";
+}
+
+const SAFE_STRING = /^[a-zA-Z0-9._/=-]+$/;
+const YAML_KEYWORDS = new Set([
+  "true",
+  "false",
+  "null",
+  "~",
+  "yes",
+  "no",
+  "on",
+  "off",
+]);
+
+function formatYamlScalar(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    const lower = value.toLowerCase();
+    if (SAFE_STRING.test(value) && !YAML_KEYWORDS.has(lower)) {
+      return value;
+    }
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : "0";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  return JSON.stringify(value);
+}
+
+function formatYamlKey(value: string): string {
+  if (SAFE_STRING.test(value) && !YAML_KEYWORDS.has(value.toLowerCase())) {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
+function yamlLines(value: unknown, indent = 0): string[] {
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) {
+    if (!value.length) return [`${pad}[]`];
+    return value.flatMap((item) => {
+      if (isPlainObject(item) || Array.isArray(item)) {
+        return [`${pad}-`, ...yamlLines(item, indent + 2)];
+      }
+      return [`${pad}- ${formatYamlScalar(item)}`];
+    });
+  }
+
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    if (!entries.length) return [`${pad}{}`];
+    return entries.flatMap(([key, item]) => {
+      const safeKey = formatYamlKey(key);
+      if (isPlainObject(item) || Array.isArray(item)) {
+        return [`${pad}${safeKey}:`, ...yamlLines(item, indent + 2)];
+      }
+      return [`${pad}${safeKey}: ${formatYamlScalar(item)}`];
+    });
+  }
+
+  return [`${pad}${formatYamlScalar(value)}`];
+}
+
+function schemaToYaml(schema: JsonSchema, resolveRef: SchemaResolver): string {
+  const example = schemaToExample(schema, resolveRef, new Set(), 0);
+  return yamlLines(example).join("\n");
+}
+
 function openApiToMicroservices(doc: OpenApiDocument): Microservice[] {
   if (!doc?.paths || typeof doc.paths !== "object") return [];
 
@@ -341,8 +588,16 @@ function MethodHeader({ m }: { m: ApiMethod }) {
   );
 }
 
-function SchemaPanel({ title, schema }: { title: string; schema?: JsonSchema }) {
-  const treeData: TreeNodeData[] = schema ? schemaToTree(schema, title) : [];
+function SchemaPanel({
+  title,
+  schema,
+  resolveRef,
+}: {
+  title: string;
+  schema?: JsonSchema;
+  resolveRef: SchemaResolver;
+}) {
+  const yaml = useMemo(() => (schema ? schemaToYaml(schema, resolveRef) : ""), [schema, resolveRef]);
   const tone = title.toLowerCase() === "request" ? "cyan" : "teal";
 
   return (
@@ -365,7 +620,11 @@ function SchemaPanel({ title, schema }: { title: string; schema?: JsonSchema }) 
           )}
         </Group>
 
-        {schema ? <Tree data={treeData} className="schema-tree" /> : null}
+        {schema ? (
+          <pre className="schema-yaml" aria-label={`${title} payload example`}>
+            <code>{yaml}</code>
+          </pre>
+        ) : null}
       </Stack>
     </Paper>
   );
@@ -381,6 +640,8 @@ export default function OpenApiIoExplorer() {
   const [loading, setLoading] = useState(false);
   const [loadedSource, setLoadedSource] = useState<string | null>(null);
   const [specTitle, setSpecTitle] = useState<string | null>(null);
+
+  const resolveRef = useMemo(() => buildSchemaResolver(previewDoc), [previewDoc]);
 
   const totals = useMemo(
     () =>
@@ -500,7 +761,7 @@ export default function OpenApiIoExplorer() {
               <Badge variant="gradient" gradient={{ from: "orange", to: "yellow", deg: 90 }}>
                 OpenAPI explorer
               </Badge>
-              <Title order={2}>OpenAPI I/O Explorer (Accordion + Schema Tree)</Title>
+              <Title order={2}>OpenAPI I/O Explorer (Accordion + Payload YAML)</Title>
               <Text c="dimmed">Load an OpenAPI JSON file from a URL or local path in data/.</Text>
               {specTitle ? <Text fw={600}>Spec: {specTitle}</Text> : null}
               {loadedSource ? (
@@ -654,8 +915,16 @@ export default function OpenApiIoExplorer() {
 
                                 <Accordion.Panel>
                                   <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-                                    <SchemaPanel title="Request" schema={m.request} />
-                                    <SchemaPanel title="Response" schema={m.response} />
+                                    <SchemaPanel
+                                      title="Request"
+                                      schema={m.request}
+                                      resolveRef={resolveRef}
+                                    />
+                                    <SchemaPanel
+                                      title="Response"
+                                      schema={m.response}
+                                      resolveRef={resolveRef}
+                                    />
                                   </SimpleGrid>
                                 </Accordion.Panel>
                               </Accordion.Item>

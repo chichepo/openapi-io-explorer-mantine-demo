@@ -213,26 +213,16 @@ code {
   font-style: normal;
 }
 
-.schema-table--excel tbody tr[data-kind="object"] td {
-  background: #fff7e8;
-  color: #7a4a00;
+.schema-table--excel tbody tr[data-kind="object"] .schema-field {
+  color: #1f5fbf;
+  font-style: italic;
 }
 
-.schema-table--excel tbody tr[data-kind="object"] .schema-index {
-  background: #fff0d6;
-}
-
-.schema-table--excel tbody tr[data-kind="array"] td,
-.schema-table--excel tbody tr[data-kind="array-open"] td,
-.schema-table--excel tbody tr[data-kind="array-close"] td {
-  background: #e9f4ff;
-  color: #1f4f7a;
-}
-
-.schema-table--excel tbody tr[data-kind="array"] .schema-index,
-.schema-table--excel tbody tr[data-kind="array-open"] .schema-index,
-.schema-table--excel tbody tr[data-kind="array-close"] .schema-index {
-  background: #dbeeff;
+.schema-table--excel tbody tr[data-kind="array"] .schema-field,
+.schema-table--excel tbody tr[data-kind="array-open"] .schema-field,
+.schema-table--excel tbody tr[data-kind="array-close"] .schema-field {
+  color: #1f7a3a;
+  font-style: italic;
 }
 
 .schema-table--excel tbody tr[data-kind="array-open"] .schema-field,
@@ -241,13 +231,10 @@ code {
   letter-spacing: 0.02em;
 }
 
-.schema-table--excel tbody tr[data-kind="array-item"] td {
-  color: #1f5a3e;
-}
-
+.schema-table--excel tbody tr[data-kind="array-item"] .schema-field,
 .schema-table--excel tbody tr[data-kind="field"] .schema-field {
+  color: #7b1e3a;
   font-weight: 700;
-  color: #0f3d2e;
 }
 
 .schema-table--excel td:last-child {

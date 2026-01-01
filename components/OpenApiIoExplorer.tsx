@@ -11,6 +11,7 @@ import {
   Group,
   Modal,
   Paper,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
@@ -33,6 +34,13 @@ type JsonSchema =
       example?: unknown;
       examples?: unknown[];
       default?: unknown;
+      minLength?: number;
+      maxLength?: number;
+      minimum?: number;
+      maximum?: number;
+      minItems?: number;
+      maxItems?: number;
+      pattern?: string;
       nullable?: boolean;
       format?: string;
       $ref?: string;
@@ -41,6 +49,7 @@ type JsonSchema =
       allOf?: JsonSchema[];
       additionalProperties?: boolean | JsonSchema;
       xml?: { name?: string };
+      "x-param-in"?: string;
     }
   | boolean;
 
@@ -111,6 +120,29 @@ const SERVICE_COLORS = ["teal", "cyan", "blue", "lime", "yellow", "orange", "red
 const DEFAULT_SOURCE = "data/petStore.json";
 
 type SchemaResolver = (ref: string) => JsonSchema | undefined;
+type PayloadFormat = "yaml" | "json" | "analysis";
+
+type SchemaRow = {
+  key: string;
+  name: string;
+  depth: number;
+  type?: string;
+  format?: string;
+  required?: boolean;
+  nullable?: boolean;
+  location?: string;
+  enumText?: string;
+  exampleText?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  pattern?: string;
+  description?: string;
+  isStructure?: boolean;
+};
 
 function pickServiceColor(name: string) {
   let hash = 0;
@@ -187,9 +219,9 @@ function buildParamsSchema(params: OpenApiParameter[]): JsonSchema | undefined {
     const baseSchema = param.schema ?? { type: "string" };
     let paramSchema: JsonSchema;
     if (typeof baseSchema === "boolean") {
-      paramSchema = baseSchema;
+      paramSchema = { type: baseSchema ? "any" : "never", "x-param-in": location };
     } else {
-      paramSchema = { ...baseSchema };
+      paramSchema = { ...baseSchema, "x-param-in": location };
       if (param.description && !paramSchema.description) {
         paramSchema.description = param.description;
       }
@@ -365,13 +397,7 @@ function schemaToExample(
 
   if (schema.type === "object" || schema.properties || schema.additionalProperties || allOfBase) {
     const properties = schema.properties ?? {};
-    const required = new Set(schema.required ?? []);
-    const keys = Object.keys(properties).sort((a, b) => {
-      const aRequired = required.has(a);
-      const bRequired = required.has(b);
-      if (aRequired !== bRequired) return aRequired ? -1 : 1;
-      return a.localeCompare(b);
-    });
+    const keys = Object.keys(properties);
     const result: Record<string, unknown> = allOfBase ? { ...allOfBase } : {};
     for (const key of keys) {
       const propSchema = properties[key];
@@ -491,6 +517,334 @@ function schemaToYaml(schema: JsonSchema, resolveRef: SchemaResolver): string {
   return yamlLines(example).join("\n");
 }
 
+function schemaToJson(schema: JsonSchema, resolveRef: SchemaResolver): string {
+  const example = schemaToExample(schema, resolveRef, new Set(), 0);
+  return JSON.stringify(example, null, 2) ?? "";
+}
+
+function schemaToPayload(
+  schema: JsonSchema,
+  resolveRef: SchemaResolver,
+  format: PayloadFormat
+): string {
+  return format === "json" ? schemaToJson(schema, resolveRef) : schemaToYaml(schema, resolveRef);
+}
+
+function formatInline(value: unknown): string {
+  if (value === undefined) return "";
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > 80) return `${serialized.slice(0, 77)}...`;
+    return serialized;
+  } catch {
+    return String(value);
+  }
+}
+
+function formatEnumValues(values?: Array<string | number | boolean | null>): string {
+  if (!values?.length) return "";
+  const formatted = values.map(formatInline);
+  const joined = formatted.join(", ");
+  if (joined.length <= 80) return joined;
+  return `${formatted.slice(0, 4).join(", ")}, ...`;
+}
+
+function inferLeafType(schema: Exclude<JsonSchema, boolean>): string {
+  if (schema.type) return schema.type;
+  if (schema.enum?.length) {
+    const first = schema.enum[0];
+    if (typeof first === "string") return "string";
+    if (typeof first === "number") return "number";
+    if (typeof first === "boolean") return "boolean";
+    if (first === null) return "null";
+  }
+  if (schema.format) return "string";
+  return "any";
+}
+
+function mergeAllOfSchema(
+  schema: Exclude<JsonSchema, boolean>,
+  resolveRef: SchemaResolver,
+  seenRefs: Set<string>
+): Exclude<JsonSchema, boolean> {
+  if (!schema.allOf?.length) return schema;
+  const base: Exclude<JsonSchema, boolean> = { ...schema };
+  const mergedRequired = new Set(base.required ?? []);
+  const mergedProperties: Record<string, JsonSchema> = { ...(base.properties ?? {}) };
+
+  for (const item of schema.allOf) {
+    if (!item || typeof item !== "object") continue;
+    const resolved = normalizeSchema(item, resolveRef, seenRefs);
+    if (!resolved || typeof resolved !== "object") continue;
+    if (!base.type && resolved.type) base.type = resolved.type;
+    if (!base.description && resolved.description) base.description = resolved.description;
+    if (resolved.properties) {
+      for (const [key, value] of Object.entries(resolved.properties)) {
+        if (!(key in mergedProperties)) {
+          mergedProperties[key] = value;
+        }
+      }
+    }
+    if (resolved.required) {
+      for (const req of resolved.required) {
+        mergedRequired.add(req);
+      }
+    }
+    if (base.additionalProperties === undefined && resolved.additionalProperties !== undefined) {
+      base.additionalProperties = resolved.additionalProperties;
+    }
+  }
+
+  if (Object.keys(mergedProperties).length) {
+    base.properties = mergedProperties;
+  }
+  if (mergedRequired.size) {
+    base.required = Array.from(mergedRequired);
+  }
+  return base;
+}
+
+function normalizeSchema(
+  schema: JsonSchema,
+  resolveRef: SchemaResolver,
+  seenRefs: Set<string>
+): JsonSchema {
+  if (schema === true || schema === false) return schema;
+  if (!schema || typeof schema !== "object") return schema;
+  const paramIn = schema["x-param-in"];
+
+  if (schema.$ref) {
+    if (seenRefs.has(schema.$ref)) return schema;
+    const resolved = resolveRef(schema.$ref);
+    if (resolved) {
+      seenRefs.add(schema.$ref);
+      const normalized = normalizeSchema(resolved, resolveRef, seenRefs);
+      seenRefs.delete(schema.$ref);
+      if (normalized && typeof normalized === "object" && paramIn && !normalized["x-param-in"]) {
+        return { ...normalized, "x-param-in": paramIn };
+      }
+      return normalized;
+    }
+  }
+
+  const merged = mergeAllOfSchema(schema, resolveRef, seenRefs);
+  if (merged.oneOf?.length) {
+    const first = merged.oneOf[0];
+    const normalized = normalizeSchema(first, resolveRef, seenRefs);
+    if (normalized && typeof normalized === "object" && paramIn && !normalized["x-param-in"]) {
+      return { ...normalized, "x-param-in": paramIn };
+    }
+    return normalized;
+  }
+  if (merged.anyOf?.length) {
+    const first = merged.anyOf[0];
+    const normalized = normalizeSchema(first, resolveRef, seenRefs);
+    if (normalized && typeof normalized === "object" && paramIn && !normalized["x-param-in"]) {
+      return { ...normalized, "x-param-in": paramIn };
+    }
+    return normalized;
+  }
+  if (paramIn && !merged["x-param-in"]) {
+    return { ...merged, "x-param-in": paramIn };
+  }
+  return merged;
+}
+
+function schemaToRows(schema: JsonSchema, resolveRef: SchemaResolver): SchemaRow[] {
+  const rows: SchemaRow[] = [];
+  const seenRefs = new Set<string>();
+  let rowIndex = 0;
+
+  const makeKey = () => `row-${rowIndex++}`;
+
+  const makeLeafRow = (
+    name: string,
+    depth: number,
+    schemaValue: Exclude<JsonSchema, boolean>,
+    required?: boolean,
+    location?: string
+  ) => {
+    const inferredType = inferLeafType(schemaValue);
+    const exampleValue = schemaToExample(schemaValue, resolveRef, new Set(), 0);
+    const row: SchemaRow = {
+      key: makeKey(),
+      name,
+      depth,
+      type: inferredType,
+      format: schemaValue.format,
+      required,
+      nullable: schemaValue.nullable,
+      location,
+      enumText: formatEnumValues(schemaValue.enum),
+      exampleText:
+        inferredType === "any" && exampleValue === "value"
+          ? ""
+          : exampleValue === undefined
+            ? ""
+            : formatInline(exampleValue),
+      minLength: schemaValue.minLength,
+      maxLength: schemaValue.maxLength,
+      minimum: schemaValue.minimum,
+      maximum: schemaValue.maximum,
+      minItems: schemaValue.minItems,
+      maxItems: schemaValue.maxItems,
+      pattern: schemaValue.pattern,
+      description: schemaValue.description,
+    };
+    rows.push(row);
+  };
+
+  const makeStructureRow = (
+    name: string,
+    depth: number,
+    schemaValue: Exclude<JsonSchema, boolean>,
+    type?: string,
+    required?: boolean,
+    location?: string
+  ) => {
+    rows.push({
+      key: makeKey(),
+      name,
+      depth,
+      type,
+      required,
+      location,
+      description: schemaValue.description,
+      isStructure: true,
+    });
+  };
+
+  const visitObject = (
+    schemaValue: Exclude<JsonSchema, boolean>,
+    depth: number,
+    location?: string
+  ) => {
+    const properties = schemaValue.properties ?? {};
+    const required = new Set(schemaValue.required ?? []);
+    for (const [propName, propSchema] of Object.entries(properties)) {
+      visitNode(propName, propSchema, depth, required.has(propName), location);
+    }
+
+    if (schemaValue.additionalProperties) {
+      const additionalSchema =
+        schemaValue.additionalProperties === true
+          ? ({ type: "any" } as JsonSchema)
+          : schemaValue.additionalProperties;
+      visitNode("additionalProperties", additionalSchema, depth, false, location);
+    }
+  };
+
+  const visitArray = (
+    schemaValue: Exclude<JsonSchema, boolean>,
+    depth: number,
+    name?: string,
+    required?: boolean,
+    location?: string
+  ) => {
+    if (name) {
+      makeStructureRow(name, depth, schemaValue, undefined, required, location);
+    }
+    const bracketDepth = name ? depth + 1 : depth;
+    makeStructureRow("[", bracketDepth, { type: "any" });
+
+    const itemsSchema = schemaValue.items ?? true;
+    const normalizedItems = normalizeSchema(itemsSchema, resolveRef, seenRefs);
+    const itemDepth = bracketDepth + 1;
+
+    if (normalizedItems === true || normalizedItems === false) {
+      const fallback = normalizedItems ? { type: "any" } : { type: "never" };
+      makeLeafRow(fallback.type ?? "item", itemDepth, fallback, false, location);
+    } else if (normalizedItems && typeof normalizedItems === "object") {
+      const isArray = normalizedItems.type === "array" || !!normalizedItems.items;
+      const isObject =
+        normalizedItems.type === "object" ||
+        !!normalizedItems.properties ||
+        !!normalizedItems.additionalProperties;
+
+      if (isArray) {
+        visitArray(normalizedItems, itemDepth, undefined, false, location);
+      } else if (isObject) {
+        visitObject(normalizedItems, itemDepth, location);
+      } else {
+        makeLeafRow(inferLeafType(normalizedItems), itemDepth, normalizedItems, false, location);
+      }
+    }
+
+    makeStructureRow("]", bracketDepth, { type: "any" });
+  };
+
+  const visitNode = (
+    name: string,
+    schemaValue: JsonSchema,
+    depth: number,
+    required?: boolean,
+    inheritedLocation?: string
+  ) => {
+    const normalized = normalizeSchema(schemaValue, resolveRef, seenRefs);
+    const location =
+      normalized && typeof normalized === "object" ? normalized["x-param-in"] : undefined;
+    const resolvedLocation = location ?? inheritedLocation;
+    if (normalized === true || normalized === false) {
+      makeLeafRow(
+        name,
+        depth,
+        normalized ? { type: "any" } : { type: "never" },
+        required,
+        resolvedLocation
+      );
+      return;
+    }
+    if (!normalized || typeof normalized !== "object") return;
+
+    const isArray = normalized.type === "array" || !!normalized.items;
+    const isObject =
+      normalized.type === "object" || !!normalized.properties || !!normalized.additionalProperties;
+
+    if (isArray) {
+      visitArray(normalized, depth, name, required, resolvedLocation);
+      return;
+    }
+
+    if (isObject) {
+      makeStructureRow(name, depth, normalized, undefined, required, resolvedLocation);
+      visitObject(normalized, depth + 1, resolvedLocation);
+      return;
+    }
+
+    makeLeafRow(name, depth, normalized, required, resolvedLocation);
+  };
+
+  const normalizedRoot = normalizeSchema(schema, resolveRef, seenRefs);
+  if (normalizedRoot === true || normalizedRoot === false) {
+    makeLeafRow("value", 0, normalizedRoot ? { type: "any" } : { type: "never" });
+    return rows;
+  }
+
+  if (!normalizedRoot || typeof normalizedRoot !== "object") return rows;
+
+  const rootIsArray = normalizedRoot.type === "array" || !!normalizedRoot.items;
+  const rootIsObject =
+    normalizedRoot.type === "object" ||
+    !!normalizedRoot.properties ||
+    !!normalizedRoot.additionalProperties;
+
+  if (rootIsArray) {
+    visitArray(normalizedRoot, 0);
+    return rows;
+  }
+
+  if (rootIsObject) {
+    visitObject(normalizedRoot, 0);
+    return rows;
+  }
+
+  makeLeafRow("value", 0, normalizedRoot);
+  return rows;
+}
+
 function openApiToMicroservices(doc: OpenApiDocument): Microservice[] {
   if (!doc?.paths || typeof doc.paths !== "object") return [];
 
@@ -592,12 +946,22 @@ function SchemaPanel({
   title,
   schema,
   resolveRef,
+  format,
 }: {
   title: string;
   schema?: JsonSchema;
   resolveRef: SchemaResolver;
+  format: PayloadFormat;
 }) {
-  const yaml = useMemo(() => (schema ? schemaToYaml(schema, resolveRef) : ""), [schema, resolveRef]);
+  const isAnalysis = format === "analysis";
+  const payload = useMemo(
+    () => (schema && !isAnalysis ? schemaToPayload(schema, resolveRef, format) : ""),
+    [schema, resolveRef, format, isAnalysis]
+  );
+  const rows = useMemo(
+    () => (schema && isAnalysis ? schemaToRows(schema, resolveRef) : []),
+    [schema, resolveRef, isAnalysis]
+  );
   const tone = title.toLowerCase() === "request" ? "cyan" : "teal";
 
   return (
@@ -620,9 +984,60 @@ function SchemaPanel({
           )}
         </Group>
 
-        {schema ? (
-          <pre className="schema-yaml" aria-label={`${title} payload example`}>
-            <code>{yaml}</code>
+        {schema && isAnalysis ? (
+          <div className="schema-table" role="region" aria-label={`${title} schema analysis`}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>In</th>
+                  <th>Type</th>
+                  <th>Required</th>
+                  <th>Format</th>
+                  <th>Nullable</th>
+                  <th>Enum</th>
+                  <th>Example</th>
+                  <th>Min</th>
+                  <th>Max</th>
+                  <th>MinLen</th>
+                  <th>MaxLen</th>
+                  <th>MinItems</th>
+                  <th>MaxItems</th>
+                  <th>Pattern</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.key} data-struct={row.isStructure ? "true" : "false"}>
+                    <td className="schema-field" style={{ paddingLeft: 8 + row.depth * 16 }}>
+                      {row.name}
+                    </td>
+                    <td>{row.location ?? ""}</td>
+                    <td>{row.type ?? ""}</td>
+                    <td>{row.required ? "yes" : ""}</td>
+                    <td>{row.format ?? ""}</td>
+                    <td>{row.nullable ? "yes" : ""}</td>
+                    <td>{row.enumText ?? ""}</td>
+                    <td>{row.exampleText ?? ""}</td>
+                    <td>{row.minimum ?? ""}</td>
+                    <td>{row.maximum ?? ""}</td>
+                    <td>{row.minLength ?? ""}</td>
+                    <td>{row.maxLength ?? ""}</td>
+                    <td>{row.minItems ?? ""}</td>
+                    <td>{row.maxItems ?? ""}</td>
+                    <td>{row.pattern ?? ""}</td>
+                    <td>{row.description ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        {schema && !isAnalysis ? (
+          <pre className="schema-code" aria-label={`${title} payload example`}>
+            <code>{payload}</code>
           </pre>
         ) : null}
       </Stack>
@@ -640,6 +1055,7 @@ export default function OpenApiIoExplorer() {
   const [loading, setLoading] = useState(false);
   const [loadedSource, setLoadedSource] = useState<string | null>(null);
   const [specTitle, setSpecTitle] = useState<string | null>(null);
+  const [payloadFormat, setPayloadFormat] = useState<PayloadFormat>("yaml");
 
   const resolveRef = useMemo(() => buildSchemaResolver(previewDoc), [previewDoc]);
 
@@ -914,16 +1330,32 @@ export default function OpenApiIoExplorer() {
                                 </Accordion.Control>
 
                                 <Accordion.Panel>
+                                  <Group justify="flex-end">
+                                    <SegmentedControl
+                                      size="xs"
+                                      value={payloadFormat}
+                                      onChange={(value) =>
+                                        setPayloadFormat(value as PayloadFormat)
+                                      }
+                                      data={[
+                                        { label: "YAML", value: "yaml" },
+                                        { label: "JSON", value: "json" },
+                                        { label: "Analysis", value: "analysis" },
+                                      ]}
+                                    />
+                                  </Group>
                                   <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
                                     <SchemaPanel
                                       title="Request"
                                       schema={m.request}
                                       resolveRef={resolveRef}
+                                      format={payloadFormat}
                                     />
                                     <SchemaPanel
                                       title="Response"
                                       schema={m.response}
                                       resolveRef={resolveRef}
+                                      format={payloadFormat}
                                     />
                                   </SimpleGrid>
                                 </Accordion.Panel>

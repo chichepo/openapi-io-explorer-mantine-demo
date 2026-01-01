@@ -884,7 +884,7 @@
           "name" : "User"
         }
       },
-      "Tag-0-19" : {
+      "Tag" : {
         "type" : "object",
         "properties" : {
           "id" : {
@@ -900,7 +900,7 @@
           "name" : "Tag"
         }
       },
-      "Pet-0-4" : {
+      "Pet" : {
         "type" : "object",
         "required" : [ "name", "photoUrls" ],
         "properties" : {

@@ -144,6 +144,108 @@ type SchemaRow = {
   isStructure?: boolean;
 };
 
+function sanitizeFileName(value: string): string {
+  const cleaned = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_");
+  return cleaned.replace(/^_+|_+$/g, "").slice(0, 80) || "analysis";
+}
+
+function csvEscape(value: string): string {
+  return `"${value.replace(/"/g, "\"\"")}"`;
+}
+
+function rowsToCsv(rows: SchemaRow[], endpointName: string, direction: string): string {
+  const header = [
+    "Endpoint",
+    "Direction",
+    "Field",
+    "In",
+    "Type",
+    "Required",
+    "Format",
+    "Nullable",
+    "Enum",
+    "Example",
+    "Min",
+    "Max",
+    "MinLen",
+    "MaxLen",
+    "MinItems",
+    "MaxItems",
+    "Pattern",
+    "Description",
+  ];
+
+  const lines = [header.map(csvEscape).join(",")];
+  for (const row of rows) {
+    const indent = " ".repeat(row.depth * 2);
+    const values = [
+      endpointName,
+      direction,
+      `${indent}${row.name}`,
+      row.location ?? "",
+      row.type ?? "",
+      row.required ? "yes" : "",
+      row.format ?? "",
+      row.nullable ? "yes" : "",
+      row.enumText ?? "",
+      row.exampleText ?? "",
+      row.minimum?.toString() ?? "",
+      row.maximum?.toString() ?? "",
+      row.minLength?.toString() ?? "",
+      row.maxLength?.toString() ?? "",
+      row.minItems?.toString() ?? "",
+      row.maxItems?.toString() ?? "",
+      row.pattern ?? "",
+      row.description ?? "",
+    ];
+    lines.push(values.map((value) => csvEscape(String(value))).join(","));
+  }
+  return lines.join("\n");
+}
+
+async function saveCsv(
+  filename: string,
+  csv: string
+): Promise<{ handled: boolean }> {
+  if (typeof window === "undefined") return { handled: false };
+  const picker = (
+    window as Window & {
+      showSaveFilePicker?: (options: {
+        suggestedName?: string;
+        types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+      }) => Promise<{ createWritable: () => Promise<WritableStream> }>;
+    }
+  ).showSaveFilePicker;
+
+  if (!picker) return { handled: false };
+
+  try {
+    const handle = await picker({
+      suggestedName: filename,
+      types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(new Blob([csv], { type: "text/csv" }));
+    await writable.close();
+    return { handled: true };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return { handled: true };
+    }
+    return { handled: false };
+  }
+}
+
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function getRowKind(row: SchemaRow): string {
   if (row.isStructure) {
     if (row.name === "[") return "array-open";
@@ -958,11 +1060,13 @@ function SchemaPanel({
   schema,
   resolveRef,
   format,
+  endpointName,
 }: {
   title: string;
   schema?: JsonSchema;
   resolveRef: SchemaResolver;
   format: PayloadFormat;
+  endpointName?: string;
 }) {
   const [analysisOpened, analysisHandlers] = useDisclosure(false);
   const isAnalysis = format === "analysis";
@@ -975,6 +1079,9 @@ function SchemaPanel({
     [schema, resolveRef, isAnalysis]
   );
   const tone = title.toLowerCase() === "request" ? "cyan" : "teal";
+  const direction = title.toLowerCase() === "request" ? "input" : "output";
+  const endpointLabel = endpointName?.trim() || title;
+  const exportFilename = sanitizeFileName(`${endpointLabel}-${direction}`) + ".csv";
 
   return (
     <Paper
@@ -1090,7 +1197,40 @@ function SchemaPanel({
           onClose={analysisHandlers.close}
           size="xl"
           centered
-          title={`${title} analysis`}
+          title={
+            <Group justify="space-between" align="center" wrap="nowrap">
+              <Text fw={600}>{title} analysis</Text>
+              <ActionIcon
+                variant="light"
+                color="blue"
+                aria-label="Export analysis CSV"
+                onClick={async () => {
+                  const csv = rowsToCsv(rows, endpointLabel, direction);
+                  const result = await saveCsv(exportFilename, csv);
+                  if (!result.handled) {
+                    downloadCsv(exportFilename, csv);
+                  }
+                }}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 3v12" />
+                  <path d="M7 10l5 5 5-5" />
+                  <path d="M4 21h16" />
+                </svg>
+              </ActionIcon>
+            </Group>
+          }
         >
           <div className="schema-table schema-table--modal schema-table--excel">
             <table>
@@ -1457,12 +1597,14 @@ export default function OpenApiIoExplorer() {
                                       schema={m.request}
                                       resolveRef={resolveRef}
                                       format={payloadFormat}
+                                      endpointName={m.operationId}
                                     />
                                     <SchemaPanel
                                       title="Response"
                                       schema={m.response}
                                       resolveRef={resolveRef}
                                       format={payloadFormat}
+                                      endpointName={m.operationId}
                                     />
                                   </SimpleGrid>
                                 </Accordion.Panel>

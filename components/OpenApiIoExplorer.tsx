@@ -998,10 +998,8 @@ function SchemaPanel({
                   strokeLinejoin="round"
                   aria-hidden="true"
                 >
-                  <path d="M9 3H3v6" />
-                  <path d="M15 21h6v-6" />
-                  <path d="M3 3l8 8" />
-                  <path d="M21 21l-8-8" />
+                  <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" />
+                  <circle cx="12" cy="12" r="2.6" />
                 </svg>
               </ActionIcon>
             ) : null}

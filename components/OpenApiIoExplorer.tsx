@@ -144,6 +144,17 @@ type SchemaRow = {
   isStructure?: boolean;
 };
 
+function getRowKind(row: SchemaRow): string {
+  if (row.isStructure) {
+    if (row.name === "[") return "array-open";
+    if (row.name === "]") return "array-close";
+    if (row.type === "[]") return "array";
+    return "object";
+  }
+  if (row.type && row.name === row.type) return "array-item";
+  return "field";
+}
+
 function pickServiceColor(name: string) {
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) {
@@ -1036,7 +1047,11 @@ function SchemaPanel({
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.key} data-struct={row.isStructure ? "true" : "false"}>
+                  <tr
+                    key={row.key}
+                    data-struct={row.isStructure ? "true" : "false"}
+                    data-kind={getRowKind(row)}
+                  >
                     <td className="schema-field" style={{ paddingLeft: 8 + row.depth * 16 }}>
                       {row.name}
                     </td>
@@ -1102,7 +1117,11 @@ function SchemaPanel({
               </thead>
               <tbody>
                 {rows.map((row, index) => (
-                  <tr key={`modal-${row.key}`} data-struct={row.isStructure ? "true" : "false"}>
+                  <tr
+                    key={`modal-${row.key}`}
+                    data-struct={row.isStructure ? "true" : "false"}
+                    data-kind={getRowKind(row)}
+                  >
                     <td className="schema-index">{index + 1}</td>
                     <td className="schema-field" style={{ paddingLeft: 8 + row.depth * 16 }}>
                       {row.name}

@@ -1079,10 +1079,11 @@ function SchemaPanel({
           centered
           title={`${title} analysis`}
         >
-          <div className="schema-table schema-table--modal">
+          <div className="schema-table schema-table--modal schema-table--excel">
             <table>
               <thead>
                 <tr>
+                  <th className="schema-index">#</th>
                   <th>Field</th>
                   <th>In</th>
                   <th>Type</th>
@@ -1102,8 +1103,9 @@ function SchemaPanel({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {rows.map((row, index) => (
                   <tr key={`modal-${row.key}`} data-struct={row.isStructure ? "true" : "false"}>
+                    <td className="schema-index">{index + 1}</td>
                     <td className="schema-field" style={{ paddingLeft: 8 + row.depth * 16 }}>
                       {row.name}
                     </td>
